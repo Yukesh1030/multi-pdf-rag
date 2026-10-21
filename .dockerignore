@@ -1,0 +1,13 @@
+
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.git/
+.gitignore
+frontend/node_modules/
+frontend/dist/
+.pytest_cache/
+.mypy_cache/
+.DS_Store

@@ -1,0 +1,20 @@
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: multi-pdf-rag-api
+
+    ports:
+      - "8000:8000"
+
+    env_file:
+      - .env
+
+    volumes:
+      - ./data:/app/data
+      - ./uploads:/app/uploads
+
+    restart: unless-stopped
