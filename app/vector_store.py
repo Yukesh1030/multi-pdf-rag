@@ -1,10 +1,12 @@
-from pathlib import Path
 
+from pathlib import Path
+from functools import lru_cache
+from typing import List
+
+from fastembed import TextEmbedding
 from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 
-# Import ingestion.py from the same app directory
 from ingestion import load_pdf, split_documents
 
 
@@ -15,23 +17,42 @@ DB_DIRECTORY = PROJECT_DIR / "data" / "chroma_db"
 
 DB_DIRECTORY.mkdir(parents=True, exist_ok=True)
 
-
-# Embedding model converts text into numerical vectors
-embeddings = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
-)
+COLLECTION_NAME = "multi_pdf_knowledge_base"
+EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 
 
-# Persistent ChromaDB vector store
+@lru_cache(maxsize=1)
+def get_embedding_model():
+    """
+    Load the embedding model only when embeddings are first required.
+    Cache one model instance to avoid loading it repeatedly.
+    """
+    print(f"Loading embedding model: {EMBEDDING_MODEL}")
+    return TextEmbedding(model_name=EMBEDDING_MODEL)
+
+
+class FastEmbedFunction:
+    """Embedding adapter compatible with LangChain Chroma."""
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        model = get_embedding_model()
+        return [vector.tolist() for vector in model.embed(texts)]
+
+    def embed_query(self, text: str) -> List[float]:
+        model = get_embedding_model()
+        return next(model.query_embed(text)).tolist()
+
+
+# Chroma can initialize without loading the embedding model.
 vector_store = Chroma(
-    collection_name="multi_pdf_knowledge_base",
-    embedding_function=embeddings,
+    collection_name=COLLECTION_NAME,
+    embedding_function=FastEmbedFunction(),
     persist_directory=str(DB_DIRECTORY),
 )
 
 
-def index_chunks(chunks: list[Document]) -> int:
-    """Index chunks and replace existing chunks from the same PDF sources."""
+def index_chunks(chunks: List[Document]) -> int:
+    """Replace previously indexed chunks for the same PDF sources."""
 
     if not chunks:
         return 0
@@ -42,22 +63,19 @@ def index_chunks(chunks: list[Document]) -> int:
         if chunk.metadata.get("source")
     }
 
-    # Remove old records for each PDF before adding its latest chunks
     for source in sources:
-        vector_store.delete(
-            where={"source": source}
-        )
+        vector_store.delete(where={"source": source})
 
     vector_store.add_documents(chunks)
 
     return len(chunks)
 
 
-def search_chunks(
-    question: str,
-    k: int = 4,
-) -> list[Document]:
-    """Retrieve the most relevant document chunks for a question."""
+def search_chunks(question: str, k: int = 4) -> List[Document]:
+    """Find relevant chunks using semantic similarity."""
+
+    if not question.strip():
+        return []
 
     return vector_store.similarity_search(
         query=question,
@@ -66,26 +84,16 @@ def search_chunks(
 
 
 def index_uploaded_pdfs() -> int:
-    """Extract, split, and index all PDFs in the uploads directory."""
+    """Index PDFs currently stored in the uploads directory."""
 
     pdf_files = sorted(UPLOADS_DIR.glob("*.pdf"))
-
-    if not pdf_files:
-        print(f"No PDF files found in: {UPLOADS_DIR}")
-        return 0
-
     total_chunks = 0
 
     for pdf_file in pdf_files:
-        print(f"\nProcessing: {pdf_file.name}")
+        print(f"Processing PDF: {pdf_file.name}")
 
-        # Step 1: Extract text from PDF pages
         pages = load_pdf(str(pdf_file))
-
-        # Step 2: Split extracted text into smaller chunks
         chunks = split_documents(pages)
-
-        # Step 3: Store chunk embeddings in ChromaDB
         indexed = index_chunks(chunks)
 
         total_chunks += indexed
@@ -93,45 +101,29 @@ def index_uploaded_pdfs() -> int:
         print(f"Pages extracted: {len(pages)}")
         print(f"Chunks indexed: {indexed}")
 
-    print(f"\nTotal chunks indexed: {total_chunks}")
-
+    print(f"Total chunks indexed: {total_chunks}")
     return total_chunks
 
 
-def main() -> None:
-    """Run the PDF indexing and semantic search demonstration."""
-
-    print("Multi-PDF Knowledge Base")
-    print("=" * 40)
-
-    # Index every PDF in uploads/
+if __name__ == "__main__":
     index_uploaded_pdfs()
 
-    # Ask a question after indexing
-    question = input(
-        "\nAsk a question about your PDFs: "
-    ).strip()
+    while True:
+        question = input(
+            "\nAsk a question about your PDFs (or type 'exit'): "
+        ).strip()
 
-    if not question:
-        print("No question entered.")
-        return
+        if question.lower() in {"exit", "quit"}:
+            break
 
-    # Retrieve relevant chunks
-    results = search_chunks(question, k=4)
+        if not question:
+            continue
 
-    print("\nRetrieved Context")
-    print("=" * 40)
+        results = search_chunks(question)
 
-    if not results:
-        print("No relevant chunks found.")
-        return
-
-    for rank, result in enumerate(results, start=1):
-        print(f"\n--- Result {rank} ---")
-        print("Source:", result.metadata.get("source", "Unknown"))
-        print("Page:", result.metadata.get("page", "Unknown"))
-        print("Text:", result.page_content)
-
-
-if __name__ == "__main__":
-    main()
+        for result in results:
+            print(
+                f"\nSource: {result.metadata.get('source', 'Unknown')}"
+                f"\nPage: {result.metadata.get('page', 'Unknown')}"
+                f"\n{result.page_content}"
+            )
