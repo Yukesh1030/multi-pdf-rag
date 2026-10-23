@@ -71,6 +71,22 @@ def index_chunks(chunks: List[Document]) -> int:
     return len(chunks)
 
 
+def delete_document_chunks(source: str) -> int:
+    """Delete only the ChromaDB chunks matching one PDF filename."""
+    matches = vector_store.get(
+        where={"source": source},
+        include=[],
+    )
+
+    ids = matches.get("ids", [])
+
+    if ids:
+        vector_store.delete(ids=ids)
+
+    return len(ids)
+
+
+
 def search_chunks(question: str, k: int = 4) -> List[Document]:
     """Find relevant chunks using semantic similarity."""
 

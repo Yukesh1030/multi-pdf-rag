@@ -1,3 +1,4 @@
+
 from pathlib import Path
 import shutil
 import re
@@ -7,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from ingestion import load_pdf, split_documents
-from vector_store import index_chunks
+from vector_store import index_chunks, delete_document_chunks
 from rag import answer_question
 
 
@@ -17,8 +18,8 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(
     title="Multi-PDF RAG API",
-    description="Upload PDFs and ask questions using RAG.",
-    version="1.0.0",
+    description="Upload PDFs, manage documents, and ask questions using RAG.",
+    version="1.1.0",
 )
 
 app.add_middleware(
@@ -29,7 +30,7 @@ app.add_middleware(
         "https://multi-pdf-rag-five.vercel.app",
     ],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
 
@@ -43,8 +44,75 @@ def home():
     return {
         "message": "Multi-PDF RAG API is running",
         "docs": "/docs",
-        "endpoints": ["/upload", "/ask"],
+        "endpoints": ["/upload", "/ask", "/documents"],
     }
+
+
+@app.get("/documents")
+def list_documents():
+    """List PDFs currently present in the uploads directory."""
+    documents = []
+
+    for pdf_path in sorted(UPLOADS_DIR.glob("*.pdf")):
+        if pdf_path.is_file():
+            documents.append({
+                "name": pdf_path.name,
+                "size_bytes": pdf_path.stat().st_size,
+            })
+
+    return {
+        "documents": documents,
+        "count": len(documents),
+    }
+
+
+@app.delete("/documents/{filename}")
+def delete_document(filename: str):
+    """Delete one uploaded PDF and only its associated ChromaDB chunks."""
+    if (
+        not filename
+        or filename in {".", ".."}
+        or Path(filename).name != filename
+        or "/" in filename
+        or "\\" in filename
+        or not filename.lower().endswith(".pdf")
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid PDF filename.",
+        )
+
+    destination = UPLOADS_DIR / filename
+
+    # Confirm the resolved file remains inside uploads/.
+    if destination.resolve().parent != UPLOADS_DIR.resolve():
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid document path.",
+        )
+
+    if not destination.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="PDF not found in the uploads directory.",
+        )
+
+    try:
+        # Remove matching vectors before removing the source PDF.
+        deleted_chunks = delete_document_chunks(filename)
+        destination.unlink()
+
+        return {
+            "message": "PDF and its indexed chunks deleted successfully.",
+            "filename": filename,
+            "chunks_deleted": deleted_chunks,
+        }
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not delete the PDF: {error}",
+        ) from error
 
 
 @app.post("/upload")
@@ -118,6 +186,7 @@ def ask_question(request: AskRequest):
             status_code=500,
             detail=f"Question answering failed: {error}",
         ) from error
+
 
 if __name__ == "__main__":
     import os
