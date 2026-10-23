@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import "./App.css";
 
-const API_URL = "http://127.0.0.1:8000";
+const API_URL = "https://multi-pdf-rag-api-2h8k.onrender.com";
 
 export default function App() {
   const [documents, setDocuments] = useState([]);
