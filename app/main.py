@@ -117,3 +117,14 @@ def ask_question(request: AskRequest):
             status_code=500,
             detail=f"Question answering failed: {error}",
         ) from error
+
+if __name__ == "__main__":
+    import os
+    import uvicorn
+
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", "8000")),
+        app_dir="app",
+    )
